@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "checkpoint-rag"
+version = "0.1.0"
+description = "RAG application built with LangChain, Pinecone, and Ragas"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-openai>=0.1.0",
+    "langchain-community>=0.3.0",
+    "langchain-pinecone>=0.2.0",
+    "pinecone-client>=5.0.0",
+    "ragas>=0.2.0",
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
