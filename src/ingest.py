@@ -1,13 +1,12 @@
 import os
 import sys
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_pinecone import PineconeVectorStore
+from langchain_openai import OpenAIEmbeddings
 from pinecone import Pinecone, ServerlessSpec
-import itertools
 from pathlib import Path
 from typing import List, Dict, Tuple
 import hashlib
+import itertools
 from langchain_community.document_loaders import (
     PyPDFLoader,
     UnstructuredHTMLLoader,
@@ -17,7 +16,6 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     MarkdownHeaderTextSplitter,
 )
-from langchain_core.documents import Document
 
 # Load environment variables from .env file
 load_dotenv()
@@ -66,6 +64,23 @@ def init_rag_components():
     )
 
     return embeddings
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+def chunks(iterable, batch_size=100):
+    """A helper function to break an iterable into chunks of size batch_size."""
+    # Convert the iterable into an iterator
+    it = iter(iterable)
+    # Slice the iterator into chunks of size batch_size
+    chunk = tuple(itertools.islice(it, batch_size))
+    while chunk:
+        # Yield the chunk
+        yield chunk
+        chunk = tuple(itertools.islice(it, batch_size))
+
 
 # ============================================================================
 # DOCUMENT LOADING & CHUNKING PIPELINE
@@ -270,13 +285,13 @@ def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
 
     # Chunk documents
     print("\n" + "=" * 70)
-    print("STEP 2: Chunking Documents (512 tokens, 20% overlap)")
+    print("STEP 2: Chunking Documents (100 tokens, 20% overlap)")
     print("=" * 70)
     all_vectors = []
     chunk_count = 0
 
     for source_path, doc_type, text in documents:
-        chunks_list = chunk_document(text, doc_type, chunk_size=512, overlap_percent=0.2)
+        chunks_list = chunk_document(text, doc_type, chunk_size=100, overlap_percent=0.2)
         print(f"  {source_path}: {len(chunks_list)} chunks")
         chunk_count += len(chunks_list)
 
@@ -308,13 +323,24 @@ def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
     
     print(f"All {len(ids)} vectors verified (1536 dimensions each)")
     
-    # Upsert all vectors together
-    print(f"STEP 4: Upserting {len(ids)} vectors to Pinecone")
+    # Upsert all vectors asynchronously in batches
+    print(f"STEP 4: Upserting {len(ids)} vectors to Pinecone (batches of 200, 20 simultaneous requests)")
     print("=" * 70)
     pc = Pinecone(api_key=PINECONE_API_KEY)
-    index = pc.Index(INDEX_NAME)
     
-    index.upsert(vectors=zip(ids, embeds, metadata))
+    # Create tuples for upsert: (id, values, metadata)
+    vector_tuples = list(zip(ids, embeds, metadata))
+    
+    # Upsert in batches of 200 with 20 simultaneous requests
+    with pc.Index(INDEX_NAME, pool_threads=20) as index:
+        async_results = [
+            index.upsert(vectors=batch, async_req=True) 
+            for batch in chunks(vector_tuples, batch_size=200)
+        ]
+        # Wait for all async requests to complete
+        for i, async_result in enumerate(async_results):
+            async_result.get()
+            print(f"  Batch {i + 1}/{len(async_results)} upserted")
     
     print(f"✓ Upserted {len(ids)} vectors")
 
