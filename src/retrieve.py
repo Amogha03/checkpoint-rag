@@ -1,11 +1,11 @@
 import os
-import sys
 from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
-# from langchain_community.retrievers import BM25Retriever
-# from langchain.retrievers import EnsembleRetriever
-# from langchain_pinecone import PineconeVectorStore
 
 # Load environment variables from .env file
 load_dotenv()
@@ -43,11 +43,61 @@ def init_rag_components():
     return index, embeddings
 
 
-def retrieve(query, top_k):
-    """Retrieves relevant documents from the Pinecone index based on the query."""
+def get_hybrid_retriever(documents: list[Document], k: int = 4):
+    """Combines Pinecone dense retrieval and BM25 sparse retrieval."""
+    if not documents:
+        raise ValueError("documents must contain at least one chunk.")
+    if not OPENAI_API_KEY or not PINECONE_API_KEY:
+        raise ValueError("Missing OPENAI_API_KEY or PINECONE_API_KEY in environment.")
+
+    embeddings = OpenAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        api_key=OPENAI_API_KEY,
+    )
+    vectorstore = PineconeVectorStore(
+        index_name=INDEX_NAME,
+        embedding=embeddings,
+        pinecone_api_key=PINECONE_API_KEY,
+    )
+    pinecone_retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+
+    bm25_retriever = BM25Retriever.from_documents(documents)
+    bm25_retriever.k = k
+
+    return EnsembleRetriever(
+        retrievers=[pinecone_retriever, bm25_retriever],
+        weights=[0.5, 0.5],
+    )
+
+
+def answer_query_hybrid(query: str, documents: list[Document]):
+    """Retrieves relevant chunks using hybrid search and asks the LLM to answer."""
+    retriever = get_hybrid_retriever(documents)
+    docs = retriever.invoke(query)
+    context = "\n\n".join(doc.page_content for doc in docs)
+
+    llm = ChatOpenAI(model=MODEL_NAME, temperature=0, api_key=OPENAI_API_KEY)
+    prompt = f"Answer using the context:\n\nContext:\n{context}\n\nQuestion:\n{query}"
+    response = llm.invoke(prompt)
+    return response.content, docs
+
+
+def retrieve(query, top_k, documents=None):
+    """Backwards-compatible retrieval helper.
+
+    If documents are supplied, this performs hybrid search using both BM25 and Pinecone.
+    Otherwise it falls back to the original vector-only Pinecone query.
+    """
+    if documents is not None:
+        retriever = get_hybrid_retriever(documents, k=top_k)
+        return retriever.invoke(query)
+
     index, embeddings = init_rag_components()
     embedding = embeddings.embed_query(query)
     
     # Query the index using the embedding
     docs = index.query(vector=embedding, top_k=top_k, include_metadata=True)
     return docs
+
+# result = retrieve("How do I rotate an API key safely?", top_k=5)
+# print("Retrieved documents:", result)
