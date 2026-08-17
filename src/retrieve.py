@@ -82,22 +82,32 @@ def answer_query_hybrid(query: str, documents: list[Document]):
     return response.content, docs
 
 
-def retrieve(query, top_k, documents=None):
-    """Backwards-compatible retrieval helper.
-
-    If documents are supplied, this performs hybrid search using both BM25 and Pinecone.
-    Otherwise it falls back to the original vector-only Pinecone query.
-    """
+def retrieve(query: str, top_k: int = 4, documents: list[Document] = None) -> list[Document]:
     if documents is not None:
         retriever = get_hybrid_retriever(documents, k=top_k)
         return retriever.invoke(query)
 
+    # Vector-only fallback: Pinecone mapping handled HERE
     index, embeddings = init_rag_components()
-    embedding = embeddings.embed_query(query)
-    
-    # Query the index using the embedding
-    docs = index.query(vector=embedding, top_k=top_k, include_metadata=True)
-    return docs
+    query_vector = embeddings.embed_query(query)
+    results = index.query(vector=query_vector, top_k=top_k, include_metadata=True)
 
+    docs = []
+    for match in results.get("matches", []):
+        meta = match.get("metadata", {})
+        
+        # Standardize metadata directly inside retrieve()
+        doc_id = meta.get("source_path", "")
+        text_content = meta.get("chunk_text", "")
+
+        docs.append(
+            Document(
+                page_content=text_content,
+                metadata={
+                    "doc_id": doc_id,
+                }
+            )
+        )
+    return docs
 # result = retrieve("How do I rotate an API key safely?", top_k=5)
 # print("Retrieved documents:", result)
