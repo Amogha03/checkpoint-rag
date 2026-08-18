@@ -359,6 +359,6 @@ def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
     }
 
 
-# Run the full pipeline
-stats = ingest_corpus("../corpus/")
-print("Ingestion stats:", stats)
+if __name__ == "__main__":
+    stats = ingest_corpus("../corpus/")
+    print("Ingestion stats:", stats)
