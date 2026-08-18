@@ -93,16 +93,19 @@ retriever = EnsembleRetriever(
 - ✅ Robust to edge cases: questions with jargon are handled by BM25; conceptual questions by dense search
 - ❌ Slight latency overhead: dual search adds ~100ms (acceptable for internal CSM tools)
 
-### Measured Impact
+### Current Implementation
 
-**Before:** Vector-only retrieval
-- Context Precision: 0.72 (missing 28% of expected sources)
-- Answer Relevancy: 0.81 (lower-quality contexts leading to generic answers)
+**Status:** Vector-only retrieval (Pinecone) active
+- Context Precision: 0.8794
+- Answer Relevancy: 0.8421
+- Average latency: 1.5s per query
 
-**After:** Hybrid (0.5/0.5)
-- Context Precision: 0.8794 ⬆ (+22% improvement)
-- Answer Relevancy: 0.8421 ⬆ (+4% improvement)
-- Trade-off: +50ms latency per query (1.5s → 2.0s average)
+**Hybrid Mode Available:** The system supports hybrid retrieval (BM25 + Pinecone at 0.5/0.5 weights) when documents are loaded in-memory via `retrieve(..., documents=documents)`. To enable in evaluation, modify `evals/harness.py` to pass documents from the corpus loader to `run_eval_harness(documents=...)`.
+
+**Expected Hybrid Gains (from LangChain literature):**
+- Context Precision: +8-12% improvement (handles keyword mismatches)
+- Answer Relevancy: +3-5% improvement (better coverage for jargon-heavy queries)
+- Trade-off: +100ms latency per query (1.5s → 2.5s average)
 
 ### Fallback Mode
 If documents are not loaded in-memory (e.g., first production deployment), the system automatically falls back to vector-only search using Pinecone's metadata filtering. BM25 requires in-memory corpus access, which is practical for development/testing but impractical at scale.
@@ -172,16 +175,16 @@ prompt = ChatPromptTemplate.from_messages([
 
 ### Summary Metrics (50-Query Test Set)
 
-| Metric | Score | Target | Status |
-| :--- | :---: | :---: | :---: |
-| **Faithfulness** | 95.32% | ≥ 90% | ✅ Pass |
-| **Answer Relevancy** | 84.21% | ≥ 85% | ⚠️ Borderline |
-| **Context Precision** | 87.94% | ≥ 80% | ✅ Pass |
+| Metric | Score | Target | 
+| :--- | :---: | :---: | 
+| **Faithfulness** | 95.32% | ≥ 90% | 
+| **Answer Relevancy** | 84.21% | ≥ 85% | 
+| **Context Precision** | 87.94% | ≥ 80% | 
 
 **Interpretation:**
 - **Faithfulness (95.32%):** High confidence that answers derive from retrieved context; minimal hallucination.
-- **Answer Relevancy (84.21%):** 84% of answers directly address the query. Gap suggests some irrelevant context or verbose responses.
-- **Context Precision (87.94%):** 88% of retrieved chunks are relevant to the query; 12% false positives (expected in hybrid search due to keyword matches).
+- **Answer Relevancy (84.21%):** 84% of answers directly address the query. Gap suggests some irrelevant context or verbose responses. Borderline performance on vector-only search.
+- **Context Precision (87.94%):** 88% of retrieved chunks are relevant to the query; 12% false positives. This baseline can be improved by enabling hybrid search to handle keyword mismatches (e.g., Q020: "SLA" vs. "response time").
 
 ### Query-Level Breakdown
 
@@ -208,11 +211,11 @@ prompt = ChatPromptTemplate.from_messages([
 **Retrieved Sources:** All chunks from `runbooks/customer-ops/custom-sla-handling.pdf` (duplicates)
 
 **Root Cause Analysis:**
-- BM25 matched "SLA" keyword but indexed the wrong document (default SLA handling, not plan-specific pricing).
-- Pinecone failed to retrieve `product-docs/billing/plans.md` (expected source) due to semantic drift: query uses "support response SLA" but the doc likely says "Pro plan includes 8-hour support response time."
-- **Why it failed:** Terminology mismatch between query and documentation. The word "SLA" (Service Level Agreement) vs. "response time" may have low embedding similarity.
+- Pinecone (vector search) failed to retrieve `product-docs/billing/plans.md` due to semantic drift: query uses "support response SLA" but the doc likely says "Pro plan includes 8-hour support response time."
+- Vector embedding similarity for "SLA" (Service Level Agreement) does not match "response time" well enough for retrieval ranking.
+- **Why it failed:** Terminology mismatch between query and documentation; pure semantic similarity insufficient without keyword matching (BM25).
 
-**Fix:** Multi-query expansion (rephrase query as "Pro plan support response time") or semantic synonym injection during indexing.
+**Potential Fix:** Enable hybrid search (BM25 + vector) which would catch the exact keyword "SLA" in both documents and rank the correct plan-specific doc higher.
 
 ---
 
@@ -261,7 +264,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 ```bash
 # 1. Clone repository and navigate to project root
-git clone [https://github.com/your-org/checkpoint-rag.git]
+git clone [https://github.com/Amogha03/checkpoint-rag.git]
 cd checkpoint-rag
 
 # 2. Create virtual environment, activate it, and install dependencies
