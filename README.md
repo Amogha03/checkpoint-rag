@@ -38,10 +38,10 @@ graph LR
 
 ## Chunking Strategy
 
-### Chunk Size: 512 Tokens (~2,048 Characters)
-**Why:** Balances semantic coherence with retrieval precision. 512 tokens is enough to capture complete thoughts/explanations while remaining small enough to avoid irrelevant noise in context windows.
+### Chunk Size: 100 Tokens (~400 Characters)
+**Why:** Smaller chunks improve retrieval precision by reducing noise and ensuring each chunk focuses on a single concept. 100 tokens is small enough to surface the most relevant context without irrelevant padding, while remaining large enough (~1-2 sentences) to preserve semantic coherence.
 
-### Overlap: 20% (102 tokens)
+### Overlap: 20% (20 tokens)
 **Why:** Prevents losing cross-boundary context (e.g., a fact at the end of one chunk that relates to the beginning of the next). The 20% represents an optimal trade-off observed in RAG literature:
 - Minimal overlap (<10%): misses inter-chunk relationships
 - Heavy overlap (>30%): increases embedding costs without proportional retrieval gains
@@ -59,7 +59,7 @@ graph LR
 - **PDF:** Lacks structural metadata; paragraphs and sentences are the most reliable boundaries.
 - **HTML:** Block-level tags (`</p>`, `</div>`) often indicate semantic boundaries better than whitespace.
 
-**Result:** ~150 total chunks across 50 documents with minimal redundancy, optimizing embedding costs ($0.04 per 1M tokens for `text-embedding-3-small`) while maintaining high retrieval precision.
+**Result:** ~600-800 total chunks across 50 documents, with high precision for single-concept retrieval. Smaller chunks mean more vectors but better semantic targeting (estimated 700 vectors for the corpus at ~$0.03 cost for text-embedding-3-small).
 
 ---
 
@@ -259,40 +259,24 @@ prompt = ChatPromptTemplate.from_messages([
 
 ## How to Run
 
-### 1. Clone and Install
 ```bash
-git clone https://github.com/your-org/checkpoint-rag.git
+# 1. Clone repository and navigate to project root
+git clone [https://github.com/your-org/checkpoint-rag.git]
 cd checkpoint-rag
-pip install -e .
-```
 
-### 2. Set Environment Variables
-```bash
+# 2. Create virtual environment, activate it, and install dependencies
+python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+
+# 3. Create environment configuration file (edit with your API keys)
 cp .env.example .env
-# Edit .env and add:
-# OPENAI_API_KEY=sk-...
-# PINECONE_API_KEY=pcn_...
-# EVAL_LLM_MODEL=gpt-4o-mini (optional)
-```
 
-### 3. Ingest Documents
-```bash
-python src/ingest.py
-```
-**What it does:** Loads corpus from `../corpus/`, chunks documents, generates embeddings, and upserts vectors to Pinecone. (~2-3 min for 50 documents)
+# 4. Ingest document corpus into Pinecone vector DB
+python -m src.ingest --corpus ./corpus
 
-### 4. Query the System
-```bash
-python src/generate.py
-```
-**What it does:** Runs a test query ("Why am I getting 429 errors when I'm under the rate limit?") and prints answer + sources + confidence.
+# 5. Run a test query and execute the 50-query evaluation harness
+python pipeline.py && python harness.py
 
-### 5. Run Evaluation
-```bash
-python evals/harness.py
 ```
-**What it does:** Executes 50-query test set through pipeline, computes Ragas metrics, and generates JSON + Markdown reports in `results/`.
-
 ---
 
 ## Next Steps: Ranked Improvements for Next Week
@@ -310,36 +294,17 @@ python evals/harness.py
    - **Implementation:** Add `rank_documents()` step in `pipeline.py` after ensemble retrieval.
    - **Trade-off:** +200ms latency; requires new API calls or model inference.
 
-### 3. **Metadata Filtering & Context Tags (Medium Priority, Low Effort)**
-   - **Problem:** Q017 fails due to context ambiguity (OAuth vs. API). Filtering can disambiguate.
-   - **Solution:** Add metadata tags during ingestion: `context_type`, `doc_category` (api, workflow, billing, admin, troubleshooting).
-   - **Implementation:** Modify `ingest.py` metadata structure; add optional filter in retrieval (e.g., `search_kwargs={"filter": {"context_type": "api"}}`).
-   - **Expected Impact:** +3-5% precision for queries with implicit context (low impact but easy win).
-
-### 4. **Caching & Query Deduplication (Medium Priority, Low Effort)**
+### 3. **Caching & Query Deduplication (Medium Priority, Low Effort)**
    - **Problem:** CSM team asks repeated questions; each re-computes embeddings and retrieval.
    - **Solution:** Redis cache (query → answer) with 24-hour TTL; reuse for identical/similar queries.
    - **Expected Impact:** 90% cache hit rate for CSM queries; 10x latency improvement for repeats.
    - **Implementation:** Wrap `generate_response()` with `functools.lru_cache` or Redis client.
 
-### 5. **Chain-of-Thought Prompting (Low Priority, High Effort)**
-   - **Problem:** Multi-step troubleshooting queries (Q042) need structured reasoning.
-   - **Solution:** Change prompt to include intermediate steps: "Step 1: Identify the symptom. Step 2: List root causes. Step 3: Recommend checks."
-   - **Expected Impact:** +10-15% answer completeness for hard queries; +$0.02 per query (longer prompts).
-   - **Implementation:** Restructure system prompt with few-shot examples of troubleshooting workflows.
-   - **Risk:** Longer responses may increase token usage; validate cost/benefit on hard queries only.
-
-### 6. **Incremental Ingestion & Update Pipeline (Low Priority, High Effort)**
+### 4. **Incremental Ingestion & Update Pipeline (Low Priority, High Effort)**
    - **Problem:** Currently re-ingests entire corpus; breaks when adding one FAQ.
    - **Solution:** Track document hashes; only re-chunk/embed modified documents. Implement soft deletes in Pinecone.
    - **Expected Impact:** Ingest time drops from 3min to 30sec for typical updates.
    - **Implementation:** Add versioning to `ingest.py`; store metadata (hash, timestamp) in Pinecone.
-
-### 7. **User Feedback Loop (Medium Priority, Medium Effort)**
-   - **Problem:** No feedback mechanism; can't track which answers users found helpful.
-   - **Solution:** Add thumbs-up/down on generated answers; log feedback to database; retrain retrieval weights.
-   - **Expected Impact:** +5-10% relevancy over 2-4 weeks as system learns from CSM feedback.
-   - **Implementation:** Add feedback endpoint to API; log to cloud storage; monthly reweighting of ensemble.
 
 ---
 
@@ -363,9 +328,6 @@ checkpoint-rag/
 │   ├── test_retrieve.py
 │   ├── test_generate.py
 │   └── test_evals.py
-├── notebooks/
-│   └── exploration.ipynb      # Development & analysis
-├── CHUNKING_STRATEGY.md       # Detailed chunking rationale
 ├── pyproject.toml             # Dependencies & build config
 └── README.md                  # This file
 ```

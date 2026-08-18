@@ -63,7 +63,7 @@ def build_rag_chain():
 
 
 # 5. Main Execution Wrapper
-def generate_response(query: str, documents: list[Document] = None, top_k: int = 4) -> RAGResponse:
+def generate_response(query: str, documents: list[Document] = None, top_k: int = 5) -> RAGResponse:
     """Supports both Hybrid search (if documents provided) and Vector-only (if documents=None)."""
     
     # 1. Retrieve docs (hybrid or vector-only fallback)
