@@ -70,8 +70,8 @@ graph LR
 ```python
 retriever = EnsembleRetriever(
     retrievers=[
-        pinecone_retriever,      # Dense: semantic similarity (top-4)
-        bm25_retriever,          # Sparse: exact keyword matching (top-4)
+        pinecone_retriever,      # Dense: semantic similarity (top-k)
+        bm25_retriever,          # Sparse: exact keyword matching (top-k)
     ],
     weights=[0.5, 0.5]          # Equal weight to both strategies
 )

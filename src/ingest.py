@@ -360,5 +360,5 @@ def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
 
 
 if __name__ == "__main__":
-    stats = ingest_corpus("../corpus/")
+    stats = ingest_corpus("./corpus/")
     print("Ingestion stats:", stats)

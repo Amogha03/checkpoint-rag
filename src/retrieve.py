@@ -43,7 +43,7 @@ def init_rag_components():
     return index, embeddings
 
 
-def get_hybrid_retriever(documents: list[Document], k: int = 5):
+def get_hybrid_retriever(documents: list[Document], k: int = 4):
     """Combines Pinecone dense retrieval and BM25 sparse retrieval."""
     if not documents:
         raise ValueError("documents must contain at least one chunk.")
@@ -82,7 +82,7 @@ def answer_query_hybrid(query: str, documents: list[Document]):
     return response.content, docs
 
 
-def retrieve(query: str, top_k: int = 5, documents: list[Document] = None) -> list[Document]:
+def retrieve(query: str, top_k: int = 4, documents: list[Document] = None) -> list[Document]:
     if documents is not None:
         retriever = get_hybrid_retriever(documents, k=top_k)
         return retriever.invoke(query)
@@ -109,5 +109,3 @@ def retrieve(query: str, top_k: int = 5, documents: list[Document] = None) -> li
             )
         )
     return docs
-# result = retrieve("How do I rotate an API key safely?", top_k=5)
-# print("Retrieved documents:", result)

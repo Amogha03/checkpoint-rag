@@ -63,7 +63,7 @@ def build_rag_chain():
 
 
 # 5. Main Execution Wrapper
-def generate_response(query: str, documents: list[Document] = None, top_k: int = 5) -> RAGResponse:
+def generate_response(query: str, documents: list[Document] = None, top_k: int = 4) -> RAGResponse:
     """Supports both Hybrid search (if documents provided) and Vector-only (if documents=None)."""
     
     # 1. Retrieve docs (hybrid or vector-only fallback)
@@ -79,7 +79,7 @@ def generate_response(query: str, documents: list[Document] = None, top_k: int =
 
 if __name__ == "__main__":
     # Quick execution test using Pinecone fallback mode
-    test_query = "Why am I getting 429 errors when I'm under the rate limit?"
+    test_query = "I'm seeing my workflow run time slowly creep up over the last two weeks even though I haven't changed anything. What should I look at?"
     
     response: RAGResponse = generate_response(test_query)
     

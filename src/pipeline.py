@@ -6,7 +6,7 @@ from generate import format_docs, build_rag_chain, RAGResponse
 def run_pipeline(
     query: str,
     documents: list[Document] = None,
-    top_k: int = 5
+    top_k: int = 4
 ) -> tuple[RAGResponse, list[Document]]:
     """
     End-to-end RAG pipeline entry point.
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     test_query = "Why am I getting 429 errors when I'm under the rate limit?"
 
     # Execute vector-only Pinecone fallback mode
-    response, docs = run_pipeline(query=test_query, top_k=5)
+    response, docs = run_pipeline(query=test_query, top_k=4)
 
     print("=== Final Answer ===")
     print(response.answer)
