@@ -6,6 +6,15 @@ Checkpoint RAG is a Retrieval-Augmented Generation (RAG) system designed to answ
 
 ---
 
+## Loom Walkthrough:
+https://www.loom.com/share/0f17ef142a2543549245af15d1a501d9
+https://www.loom.com/share/5d51755c783f45ed80e9495a6c54f3ac
+https://www.loom.com/share/3a8fcbc3fbb1443c80ea93be42be8118
+https://www.loom.com/share/0a15e6a8289942869194f893b2d434ae
+https://www.loom.com/share/c680794a057642f09ba5399e4c4dc127
+
+---
+
 ## Architecture
 
 ```mermaid
