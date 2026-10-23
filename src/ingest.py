@@ -155,7 +155,7 @@ def estimate_tokens(text: str) -> int:
 def chunk_document(
     text: str,
     doc_type: str,
-    chunk_size: int = 512,
+    chunk_size: int = 100,
     overlap_percent: float = 0.2,
 ) -> List[str]:
     """
