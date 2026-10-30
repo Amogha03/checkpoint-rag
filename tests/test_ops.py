@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import ingest
+from ops.data_quality import run_validations as validation_runner
 from ops.data_quality.expectations import validate_records
 from ops.langsmith import setup as langsmith_setup
 from ops.langsmith.evaluators import answer_relevance, custom_judge, faithfulness
@@ -84,37 +86,68 @@ def test_langsmith_dataset_examples_have_stable_ids(tmp_path):
 
 def test_phoenix_initialization_launches_and_instruments_once(monkeypatch):
     calls = []
+    session = SimpleNamespace(active=True)
     monkeypatch.setattr(phoenix_instrument, "_SESSION", None)
     monkeypatch.setattr(phoenix_instrument, "_INSTRUMENTED", False)
-    monkeypatch.setattr(phoenix_instrument.px, "launch_app", lambda: calls.append("launch") or "session")
+    monkeypatch.setattr(phoenix_instrument, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(phoenix_instrument, "_launch_phoenix", lambda: calls.append("launch") or session)
+    provider = SimpleNamespace(get_tracer=lambda _name: phoenix_instrument._TRACER)
+    monkeypatch.setattr(phoenix_instrument, "_configure_phoenix_tracing", lambda: calls.append("configure") or provider)
+    monkeypatch.setattr(phoenix_instrument, "_instrument_langchain", lambda _provider: calls.append("instrument"))
 
-    class DummyInstrumentor:
-        def instrument(self):
-            calls.append("instrument")
-
-    monkeypatch.setattr(phoenix_instrument, "LangChainInstrumentor", DummyInstrumentor)
-
-    assert phoenix_instrument.initialize_phoenix() == "session"
-    assert phoenix_instrument.initialize_phoenix() == "session"
-    assert calls == ["launch", "instrument"]
+    assert phoenix_instrument.initialize_phoenix() is session
+    assert phoenix_instrument.initialize_phoenix() is session
+    assert calls == ["launch", "configure", "instrument"]
 
 
 def test_great_expectations_suite_validates_chunk_records():
+    chunk_text = "word " * 60
     result = validate_records([{
-        "chunk_text": "A valid chunk without personal data.",
-        "source_path": "guide.md",
-        "embedding": [0.0] * 1536,
+        "id": "vector-0",
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": chunk_text,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
     }])
 
     assert result.success
-    assert result.statistics["evaluated_expectations"] == 5
+    assert result.statistics["evaluated_expectations"] == 9
+
+
+def test_validation_runner_writes_reports(tmp_path, monkeypatch):
+    monkeypatch.setattr(validation_runner, "RESULTS_DIR", tmp_path)
+    records = [{
+        "id": "vector-0",
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": "word " * 60,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
+    }]
+
+    result = validation_runner.run_validations(records)
+    saved = json.loads((tmp_path / "validation_results.json").read_text(encoding="utf-8"))
+    report = (tmp_path / "validation_report.md").read_text(encoding="utf-8")
+
+    assert result["success"] is True
+    assert saved["statistics"]["evaluated_expectations"] == 9
+    assert "Great Expectations validation: PASS" in report
 
 
 def test_great_expectations_detects_invalid_vector_dimensions():
     result = validate_records([{
-        "chunk_text": "A valid chunk without personal data.",
-        "source_path": "guide.md",
-        "embedding": [0.0] * 3,
+        "values": [0.0] * 3,
+        "metadata": {
+            "chunk_text": "word " * 60,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
     }])
 
     assert not result.success
@@ -122,8 +155,12 @@ def test_great_expectations_detects_invalid_vector_dimensions():
 
 def test_great_expectations_detects_missing_embedding():
     result = validate_records([{
-        "chunk_text": "A valid chunk without personal data.",
-        "source_path": "guide.md",
+        "metadata": {
+            "chunk_text": "word " * 60,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
     }])
 
     assert not result.success
@@ -131,9 +168,13 @@ def test_great_expectations_detects_missing_embedding():
 
 def test_great_expectations_detects_empty_chunk_text():
     result = validate_records([{
-        "chunk_text": "",
-        "source_path": "guide.md",
-        "embedding": [0.0] * 1536,
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": "",
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
     }])
 
     assert not result.success
@@ -141,9 +182,41 @@ def test_great_expectations_detects_empty_chunk_text():
 
 def test_great_expectations_detects_pii():
     result = validate_records([{
-        "chunk_text": "Contact alex@example.com for help.",
-        "source_path": "guide.md",
-        "embedding": [0.0] * 1536,
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": "word " * 60 + " alex@example.com",
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
+    }])
+
+    assert not result.success
+
+
+def test_great_expectations_allows_shared_role_email():
+    result = validate_records([{
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": "Contact security@helix.io for allowlist questions. " + "word " * 60,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
+    }])
+
+    assert result.success
+
+
+def test_great_expectations_detects_api_key_patterns():
+    result = validate_records([{
+        "values": [0.0] * 1536,
+        "metadata": {
+            "chunk_text": "token = sk-" + "A" * 32 + " " + "word " * 60,
+            "source_path": "guide.md",
+            "chunk_index": 0,
+            "doc_type": "markdown",
+        },
     }])
 
     assert not result.success
@@ -159,4 +232,81 @@ def test_ingestion_chunks_default_to_100_tokens_and_preserve_source_path():
 
     assert chunks
     assert max(ingest.estimate_tokens(chunk) for chunk in chunks) <= 100
+    assert min(ingest.estimate_tokens(chunk) for chunk in chunks) >= 50
     assert vectors[0]["metadata"]["source_path"] == "guide.pdf"
+
+
+def test_phoenix_sample_runner_writes_ten_query_spans(tmp_path, monkeypatch):
+    class DummySpan:
+        def __init__(self):
+            self.attributes = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def set_attribute(self, name, value):
+            self.attributes[name] = value
+
+        def record_exception(self, _error):
+            pass
+
+        def set_status(self, _status):
+            pass
+
+    class DummyTracer:
+        def __init__(self):
+            self.spans = []
+
+        def start_as_current_span(self, _name):
+            span = DummySpan()
+            self.spans.append(span)
+            return span
+
+    class DummyCallback:
+        prompt_tokens = 10
+        completion_tokens = 4
+        total_tokens = 14
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    test_set = tmp_path / "eval.json"
+    test_set.write_text(
+        json.dumps({"queries": [{"id": f"Q{i:03}", "query": f"Question {i}?"} for i in range(10)]}),
+        encoding="utf-8",
+    )
+    pipeline = type(sys)("pipeline")
+    pipeline.run_pipeline = lambda _query, top_k=4: (
+        SimpleNamespace(sources=["guide.md"], confidence="high"),
+        [SimpleNamespace(page_content="context", metadata={"doc_id": "guide.md"})],
+    )
+    callbacks = type(sys)("langchain_community.callbacks")
+    callbacks.get_openai_callback = DummyCallback
+    tracer = DummyTracer()
+    monkeypatch.setattr(phoenix_instrument, "_TRACER", tracer)
+    monkeypatch.setattr(phoenix_instrument, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(phoenix_instrument, "initialize_phoenix", lambda **_kwargs: None)
+    monkeypatch.setitem(sys.modules, "pipeline", pipeline)
+    monkeypatch.setitem(sys.modules, "langchain_community.callbacks", callbacks)
+    output_path = tmp_path / "traces.json"
+
+    results = phoenix_instrument.run_sample_queries(
+        test_set_path=test_set,
+        output_path=output_path,
+        launch_server=False,
+    )
+
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert len(results) == saved["query_count"] == len(tracer.spans) == 10
+    assert all(span.attributes["llm.token_count.total"] == 14 for span in tracer.spans)
+    assert all(
+        json.loads(span.attributes["retrieval.document_ids"]) == ["guide.md"]
+        for span in tracer.spans
+    )
+    assert all(record["retrieved_doc_ids"] == ["guide.md"] for record in results)

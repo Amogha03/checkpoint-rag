@@ -23,6 +23,9 @@ dependencies = [
     "arize-phoenix>=8.0.0",
     "openinference-instrumentation-langchain>=0.1.29",
     "great-expectations>=0.18.21,<1.0",
+    "scipy>=1.14.1,<1.15",
+    "opentelemetry-sdk>=1.34.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.34.0",
 ]
 
 [project.optional-dependencies]

@@ -10,15 +10,35 @@ from great_expectations.execution_engine import PandasExecutionEngine
 from great_expectations.expectations.expectation import ExpectationConfiguration
 from great_expectations.validator.validator import Validator
 
-TARGET_CHUNK_TOKENS = 100
-MAX_CHUNK_TOKENS = 125
+MIN_CHUNK_TOKENS = 50
+MAX_CHUNK_TOKENS = 300
 EMBEDDING_DIMENSIONS = 1536
+EMAIL_REGEX = re.compile(r"\b([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
+ROLE_EMAIL_NAMES = {
+    "abuse", "admin", "contact", "help", "info", "legal", "postmaster",
+    "privacy", "sales", "security", "support",
+}
 PII_REGEX = re.compile(
-    r"(?s).*(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|"
-    r"\b\d{3}-\d{2}-\d{4}\b|"
-    r"\b(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b).*",
+    r"(?is).*(?:\b\d{3}-\d{2}-\d{4}\b|"
+    r"\b(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b|"
+    r"\bsk-[A-Za-z0-9_-]{20,}\b|"
+    r"\bpcsk_[A-Za-z0-9_-]{20,}\b|"
+    r"\blsv2_[A-Za-z0-9_-]{20,}\b|"
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}\b|"
+    r"\bAKIA[0-9A-Z]{16}\b|"
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}).*",
     re.IGNORECASE,
 )
+
+
+def contains_pii(text: str) -> bool:
+    """Detect personal email addresses, phone/SSN values, and common API keys."""
+    if PII_REGEX.search(text):
+        return True
+    return any(
+        local_part.lower() not in ROLE_EMAIL_NAMES
+        for local_part, _domain in EMAIL_REGEX.findall(text)
+    )
 
 
 def build_expectation_suite() -> ExpectationSuite:
@@ -26,11 +46,18 @@ def build_expectation_suite() -> ExpectationSuite:
     expectations = [
         ExpectationConfiguration(
             expectation_type="expect_column_values_to_be_between",
-            kwargs={"column": "chunk_tokens", "min_value": 1, "max_value": MAX_CHUNK_TOKENS},
+            kwargs={"column": "chunk_tokens", "min_value": MIN_CHUNK_TOKENS, "max_value": MAX_CHUNK_TOKENS},
         ),
+        *[
+            ExpectationConfiguration(
+                expectation_type="expect_column_values_to_not_be_null",
+                kwargs={"column": column},
+            )
+            for column in ("source_path", "chunk_index", "doc_type", "chunk_text")
+        ],
         ExpectationConfiguration(
-            expectation_type="expect_column_values_to_not_be_null",
-            kwargs={"column": "source_path"},
+            expectation_type="expect_column_values_to_be_between",
+            kwargs={"column": "chunk_index", "min_value": 0},
         ),
         ExpectationConfiguration(
             expectation_type="expect_column_values_to_be_in_set",
@@ -53,23 +80,30 @@ def build_expectation_suite() -> ExpectationSuite:
 def normalize_records(records: list[dict[str, Any]]) -> pd.DataFrame:
     normalized = []
     for record in records:
-        text = str(record.get("chunk_text", ""))
-        embedding = record.get("embedding")
+        metadata = record.get("metadata") or record
+        raw_text = metadata.get("chunk_text")
+        text = str(raw_text) if raw_text is not None else ""
+        embedding = record.get("values")
+        if embedding is None:
+            embedding = record.get("embedding")
         normalized.append({
             "chunk_text": text,
-            "contains_pii": bool(PII_REGEX.search(text)),
-            "chunk_tokens": (len(text) + 3) // 4,
-            "source_path": record.get("source_path"),
+            "contains_pii": contains_pii(text),
+            "chunk_tokens": len(text) // 4,
+            "source_path": metadata.get("source_path"),
+            "chunk_index": metadata.get("chunk_index"),
+            "doc_type": metadata.get("doc_type"),
             "has_embedding": embedding is not None,
             "embedding_dimensions": len(embedding) if embedding is not None else None,
         })
     return pd.DataFrame(normalized, columns=[
-        "chunk_text", "contains_pii", "chunk_tokens", "source_path", "has_embedding", "embedding_dimensions",
+        "chunk_text", "contains_pii", "chunk_tokens", "source_path", "chunk_index", "doc_type",
+        "has_embedding", "embedding_dimensions",
     ])
 
 
 def validate_records(records: list[dict[str, Any]]):
-    """Run the suite on chunk records and return the GE validation result."""
+    """Run the suite on pre-upsert Pinecone vector records and return GE results."""
     frame = normalize_records(records)
     validator = Validator(
         execution_engine=PandasExecutionEngine(),

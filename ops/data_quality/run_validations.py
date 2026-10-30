@@ -11,27 +11,28 @@ RESULTS_DIR = ROOT / "ops" / "data_quality" / "results"
 
 
 def build_sample_records(corpus_dir: str | Path = ROOT / "corpus") -> list[dict[str, Any]]:
-    """Build local shape fixtures; zero vectors do not represent real embeddings."""
+    """Build pre-upsert-shaped records from ingestion chunks using local vectors."""
     import sys
 
     sys.path.insert(0, str(ROOT / "src"))
-    from ingest import chunk_document
+    from ingest import chunk_document, create_chunk_vectors
+
+    class ShapeOnlyEmbeddings:
+        def embed_query(self, _text: str) -> list[float]:
+            return [0.0] * EMBEDDING_DIMENSIONS
 
     corpus_path = Path(corpus_dir)
     records = []
-    for path in sorted(corpus_path.rglob("*.md"))[:5]:
+    embeddings = ShapeOnlyEmbeddings()
+    for path in sorted(corpus_path.rglob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
-        for index, chunk in enumerate(chunk_document(text, "markdown")):
-            if not chunk.strip():
-                continue
-            source = str(path.relative_to(corpus_path))
-            records.append({
-                "chunk_text": chunk,
-                "source_path": source,
-                "embedding": [0.0] * EMBEDDING_DIMENSIONS,
-            })
-            if len(records) >= 25:
-                return records
+        chunks = chunk_document(text, "markdown")
+        if not chunks:
+            continue
+        source = str(path.relative_to(corpus_path))
+        records.extend(create_chunk_vectors(chunks, source, "markdown", embeddings))
+        if len(records) >= 25:
+            return records[:25]
     if not records:
         raise ValueError(f"No Markdown chunks found in {corpus_path}")
     return records
@@ -41,7 +42,7 @@ def run_validations(records: list[dict[str, Any]] | None = None) -> dict[str, An
     records = records if records is not None else build_sample_records()
     result = validate_records(records)
     payload = result.to_json_dict()
-    payload["fixture_note"] = "Embeddings are zero-valued 1536-dimensional shape fixtures, not model outputs."
+    payload["fixture_note"] = "Vector values are zero-valued 1536-dimensional shape fixtures, not model outputs."
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / "validation_results.json").write_text(
         json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -68,3 +69,5 @@ if __name__ == "__main__":
     report = run_validations()
     print(f"Data quality suite success: {report['success']}")
     print(f"Reports saved to {RESULTS_DIR}")
+    if not report["success"]:
+        raise SystemExit(1)
