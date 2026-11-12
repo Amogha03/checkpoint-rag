@@ -10,17 +10,14 @@ The system ingests Markdown, PDF, and HTML content, chunks it into semantically 
 
 ## Loom walkthrough
 
-### Module 1
-
-- https://www.loom.com/share/0f17ef142a2543549245af15d1a501d9
-- https://www.loom.com/share/5d51755c783f45ed80e9495a6c54f3ac
-- https://www.loom.com/share/3a8fcbc3fbb1443c80ea93be42be8118
-- https://www.loom.com/share/0a15e6a8289942869194f893b2d434ae
-- https://www.loom.com/share/c680794a057642f09ba5399e4c4dc127
-
 ### Module 4
 
-TBD
+- https://www.loom.com/share/0a949601ce484ee88205f3ee3ef12630
+- https://www.loom.com/share/5e2b95cc464c4330aba2ea0b29ac7d1d
+- https://www.loom.com/share/e1a4218c2374471496b5ec93240bec62
+- https://www.loom.com/share/be3637e8493a4bda9c26fd7ad80091d8
+- https://www.loom.com/share/f679a342289a4839939d7f2b14ca8544
+- https://www.loom.com/share/56dd5a0df1dd44e28b1f5c6a8ec2a601
 
 ---
 
