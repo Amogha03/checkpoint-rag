@@ -1,17 +1,23 @@
-# Checkpoint RAG: Production-Grade Retrieval-Augmented Generation System
+# Checkpoint RAG: Production-Grade Retrieval-Augmented Generation system
 
 ## Overview
 
-Checkpoint RAG is a Retrieval-Augmented Generation (RAG) system designed to answer internal employee queries accurately using an internal knowledge base of product documentation, runbooks, and support tickets. Built with LangChain, Pinecone vector database, and OpenAI embeddings, it combines hybrid search (dense vector + sparse BM25 retrieval) with structured prompt engineering and Ragas evaluation to deliver high-accuracy answers with source traceability. The system ingests multiple document types (Markdown, PDF, HTML) with semantic chunking, retrieves the top-k most relevant chunks via hybrid search, and generates grounded answers with confidence scores and source citations.
+Checkpoint RAG is a Retrieval-Augmented Generation (RAG) system for answering internal employee questions using a curated knowledge base of product documentation, runbooks, and support tickets. It combines hybrid search (dense vector retrieval + sparse BM25 retrieval), grounded prompting, and evaluation tooling to deliver answers with source traceability and confidence indicators.
+
+The system ingests Markdown, PDF, and HTML content, chunks it into semantically focused sections, embeds those sections, and stores them in Pinecone. Retrieval is handled by a hybrid ensemble retriever. Generation is performed by a grounded chat model that returns a structured `RAGResponse` containing the answer, sources, and confidence.
 
 ---
 
-## Loom Walkthrough:
-https://www.loom.com/share/0f17ef142a2543549245af15d1a501d9
-https://www.loom.com/share/5d51755c783f45ed80e9495a6c54f3ac
-https://www.loom.com/share/3a8fcbc3fbb1443c80ea93be42be8118
-https://www.loom.com/share/0a15e6a8289942869194f893b2d434ae
-https://www.loom.com/share/c680794a057642f09ba5399e4c4dc127
+## Loom walkthrough
+
+### Module 4
+
+- https://www.loom.com/share/0a949601ce484ee88205f3ee3ef12630
+- https://www.loom.com/share/5e2b95cc464c4330aba2ea0b29ac7d1d
+- https://www.loom.com/share/e1a4218c2374471496b5ec93240bec62
+- https://www.loom.com/share/be3637e8493a4bda9c26fd7ad80091d8
+- https://www.loom.com/share/f679a342289a4839939d7f2b14ca8544
+- https://www.loom.com/share/56dd5a0df1dd44e28b1f5c6a8ec2a601
 
 ---
 
@@ -23,120 +29,149 @@ graph LR
     B -->|Chunk| C[Semantic Chunking]
     C -->|Embed| D[OpenAI Embeddings]
     D -->|Upsert| E[Pinecone Vector DB]
-    
+
     Q["User Query"] -->|Embed| D
     D -->|Dense Similarity| E
     Q -->|BM25 Match| F[BM25 Sparse Index]
-    
+
     E -->|Top-K Vectors| G{Ensemble Retriever}
     F -->|Top-K Docs| G
-    
-    G -->|Weighted Merge<br/>0.5 density + 0.5 sparse| H[Retrieved Context]
+
+    G -->|Weighted Merge\n0.5 dense + 0.5 sparse| H[Retrieved Context]
     H -->|Format| I[Prompt Template]
     Q -->|Add| I
-    
-    I -->|Generate| J["ChatOpenAI<br/>gpt-4o-mini"]
-    J -->|Structured Output| K["RAGResponse<br/>answer + sources<br/>+ confidence"]
+
+    I -->|Generate| J["ChatOpenAI\ngpt-4o-mini"]
+    J -->|Structured Output| K["RAGResponse\nanswer + sources\n+ confidence"]
     K -->|Display| L[User Response]
-    
-    K -->|Evaluate| M["Ragas Metrics<br/>Faithfulness<br/>Answer Relevancy<br/>Context Precision"]
+
+    K -->|Evaluate| M["Ragas Metrics\nFaithfulness\nAnswer Relevancy\nContext Precision"]
     M -->|Report| N[Eval Results]
 ```
 
 ---
 
-## Chunking Strategy
+## Chunking strategy
 
-### Chunk Size: 100 Tokens (~400 Characters)
-**Why:** Smaller chunks improve retrieval precision by reducing noise and ensuring each chunk focuses on a single concept. 100 tokens is small enough to surface the most relevant context without irrelevant padding, while remaining large enough (~1-2 sentences) to preserve semantic coherence.
+### Chunk size: 100 tokens (~400 characters)
+
+Why:
+
+- Smaller chunks improve retrieval precision by reducing noise.
+- Each chunk stays focused on a single concept.
+- 100 tokens is large enough to preserve context while remaining specific.
 
 ### Overlap: 20% (20 tokens)
-**Why:** Prevents losing cross-boundary context (e.g., a fact at the end of one chunk that relates to the beginning of the next). The 20% represents an optimal trade-off observed in RAG literature:
-- Minimal overlap (<10%): misses inter-chunk relationships
-- Heavy overlap (>30%): increases embedding costs without proportional retrieval gains
 
-### Document-Type-Specific Strategies
+Why:
 
-| Document Type | Strategy | Separators | Special Handling |
-|---|---|---|---|
-| **Markdown** | Header-aware + recursive split | Headers (`#`, `##`, `###`) → paragraphs (`\n\n`) → sentences (`. `) → words | Preserves semantic structure; groups sub-sections together |
-| **PDF** | Recursive character split | Paragraphs (`\n\n`) → lines (`\n`) → sentences (`. `) → words | Handles both text-native and scanned (OCR) PDFs uniformly |
-| **HTML** | HTML-aware recursive split | Block elements (`</p>`, `</div>`) → paragraphs (`\n\n`) → sentences (`. `) | Strips HTML tags; respects logical content boundaries |
+- Preserves continuity across chunk boundaries.
+- Avoids losing information at the end of one section and the start of the next.
+- A 20% overlap is a practical tradeoff between relevance and cost.
 
-### Why Different Strategies?
-- **Markdown:** Hierarchical structure (headings) provides natural chapter/section boundaries—exploiting this improves retrieval accuracy for docs like "Creating Workflows" which may span multiple heading levels.
-- **PDF:** Lacks structural metadata; paragraphs and sentences are the most reliable boundaries.
-- **HTML:** Block-level tags (`</p>`, `</div>`) often indicate semantic boundaries better than whitespace.
+### Document-type-specific strategies
 
-**Result:** ~600-800 total chunks across 50 documents, with high precision for single-concept retrieval. Smaller chunks mean more vectors but better semantic targeting (estimated 700 vectors for the corpus at ~$0.03 cost for text-embedding-3-small).
+| Document type | Strategy | Separators | Special handling |
+| --- | --- | --- | --- |
+| Markdown | Header-aware + recursive split | Headers (`#`, `##`, `###`) → paragraphs (`\n\n`) → sentences (`. `) → words | Preserves semantic section boundaries |
+| PDF | Recursive character split | Paragraphs (`\n\n`) → lines (`\n`) → sentences (`. `) → words | Handles both text-native and OCR-derived PDFs |
+| HTML | HTML-aware recursive split | Block elements (`</p>`, `</div>`) → paragraphs (`\n\n`) → sentences (`. `) | Strips HTML tags and preserves logical boundaries |
+
+### Why different strategies?
+
+- Markdown documents have an explicit hierarchy of headings and sections.
+- PDFs are structurally weaker and rely more on paragraph and sentence boundaries.
+- HTML often exposes semantic block boundaries better than raw whitespace.
+
+Result: roughly 600-800 total chunks across 50 documents, with better precision for single-concept retrieval. Smaller chunks result in more vectors and stronger semantic targeting.
 
 ---
 
-## Retrieval Strategy: Hybrid Search (Dense + Sparse)
+## Retrieval strategy: hybrid search (dense + sparse)
 
-### Implementation: Ensemble Retriever with Weighted Merge
+### Implementation
 
 ```python
 retriever = EnsembleRetriever(
     retrievers=[
-        pinecone_retriever,      # Dense: semantic similarity (top-k)
-        bm25_retriever,          # Sparse: exact keyword matching (top-k)
+        pinecone_retriever,  # Dense semantic similarity
+        bm25_retriever,      # Sparse keyword matching
     ],
-    weights=[0.5, 0.5]          # Equal weight to both strategies
+    weights=[0.5, 0.5],
 )
 ```
 
-### Why Hybrid (vs. Dense Only)?
+### Why hybrid search?
 
-**Dense Retrieval Alone (Pinecone Vector Search):**
-- ✅ Semantic understanding: captures meaning beyond keywords
-- ❌ Fails on exact matches: query "HTTP 429" might not find the section titled "HTTP Status Codes" if embedding space diverges
-- ❌ Brittle to paraphrasing mismatches
+#### Dense retrieval alone
 
-**Sparse Retrieval Alone (BM25):**
-- ✅ Keyword precision: finds exact terminology and acronyms
-- ❌ No semantic understanding: can't link "API rate limit" to "429 Too Many Requests"
+Pros:
 
-**Hybrid (0.5 Dense + 0.5 Sparse):**
-- ✅ Semantic + keyword coverage: retrieves both meaning-aligned and keyword-exact results
-- ✅ Robust to edge cases: questions with jargon are handled by BM25; conceptual questions by dense search
-- ❌ Slight latency overhead: dual search adds ~100ms (acceptable for internal CSM tools)
+- Captures semantic meaning beyond exact keywords.
 
-### Measured Impact
+Cons:
 
-**Before:** Vector-only retrieval
-- Context Precision: 0.8794
-- Answer Relevancy: 0.8421
-- Average latency: 1.5s per query
+- Struggles with terminology mismatches.
+- Can miss exact matches such as `HTTP 429` when the phrasing differs from the source text.
 
-**After:** Hybrid (0.5/0.5)
-- Context Precision: 0.9344
-- Answer Relevancy: 0.8718
-- Average latency: 2.0s per query (+50ms latency per query)
+#### Sparse retrieval alone
+
+Pros:
+
+- Strong at exact keyword and acronym matching.
+
+Cons:
+
+- Weak when the query is conceptual or rephrased.
+
+#### Hybrid retrieval (0.5 dense + 0.5 sparse)
+
+Pros:
+
+- Balances semantic relevance with exact keyword coverage.
+- More robust against paraphrasing and jargon-heavy queries.
+
+Cons:
+
+- Adds a small amount of latency.
+
+### Measured impact
+
+Before: vector-only retrieval
+
+- Context precision: 0.8794
+- Answer relevancy: 0.8421
+- Average latency: 1.5s/query
+
+After: hybrid retrieval (0.5/0.5)
+
+- Context precision: 0.9344
+- Answer relevancy: 0.8718
+- Average latency: 2.0s/query
 
 ---
 
-## Generation Prompt & Structured Output
+## Generation prompt and structured output
 
-### System Prompt
+### System prompt
 
-```
-You are an internal AI Support Assistant for the Customer Success team. Your primary task 
-is to answer employee queries accurately using ONLY the provided internal documentation, 
+```text
+You are an internal AI Support Assistant for the Customer Success team. Your primary task
+is to answer employee queries accurately using ONLY the provided internal documentation,
 runbooks, and post-mortems.
 
 Instructions:
-1. Grounding: Base your answer strictly on the facts present in the context. 
+1. Grounding: Base your answer strictly on the facts present in the context.
    Do NOT extrapolate or bring in outside knowledge.
 2. Sources: List the document IDs of the sources used to formulate the answer.
-3. Unanswered Queries: If the context lacks sufficient information, explicitly state 
+3. Unanswered Queries: If the context lacks sufficient information, explicitly state
    that you cannot answer from the knowledge base and set confidence to 'low'.
 
 ### Internal Context:
 {context}
 ```
 
-### Prompt Template Structure
+### Prompt template structure
 
 ```python
 prompt = ChatPromptTemplate.from_messages([
@@ -145,212 +180,273 @@ prompt = ChatPromptTemplate.from_messages([
 ])
 ```
 
-### Reasoning for Structure
+### Reasoning behind the structure
 
-1. **System Message with Role Definition:**
-   - Anchors the LLM to a specific persona ("internal AI Support Assistant")
-   - Prevents hallucination by explicitly forbidding extrapolation
-   - Emphasizes grounding in provided context (critical for internal use where accuracy > creativity)
+1. System message with a role definition
+   - Anchors the model to a specific persona.
+   - Prevents hallucinations by explicitly forbidding unsupported extrapolation.
+   - Emphasizes grounding in the provided context.
 
-2. **Structured Output (Pydantic Schema):**
+2. Structured output using a Pydantic schema
+
    ```python
    class RAGResponse(BaseModel):
-       answer: str  # Detailed, context-grounded response
-       sources: list[str]  # Document IDs for traceability
-       confidence: Literal["low", "medium", "high"]  # Self-assessed confidence
+       answer: str
+       sources: list[str]
+       confidence: Literal["low", "medium", "high"]
    ```
-   - **Why structured output:** Enables downstream automation (e.g., "if confidence='low', escalate to human"), removes parsing ambiguity, and provides consistent JSON for APIs.
-   - **Why confidence levels:** Allows the system to surface uncertainty; queries with low confidence are flagged for CSM review.
 
-3. **Context Formatting with Document IDs:**
+   This makes downstream automation easier and keeps outputs machine-friendly.
+
+3. Context formatting with document IDs
+
    ```python
    "--- Document ID: {doc_id} ---\nContent:\n{chunk_text}\n"
    ```
-   - Inline citations enable the LLM to reference specific sources in the `sources` field
-   - Metadata (doc_id, chunk_index) aids debugging and audit trails
 
-4. **Temperature = 0:**
-   - Deterministic generation for reproducibility
-   - Critical for internal tools where consistency matters more than diversity
+   Inline citations make it easier for the model to reference reliable evidence.
+
+4. Temperature = 0
+   - Keeps generation deterministic.
+   - Matters for internal support workflows where consistency is critical.
 
 ---
 
-## Evaluation Results
+## Evaluation results
 
-### Summary Metrics (50-Query Test Set)
+### Summary metrics (50-query test set)
 
 | Metric | Score |
-| :--- | :---: |
-| **Faithfulness** | 95.32% |
-| **Answer Relevancy** | 84.21% |
-| **Context Precision** | 87.94% | 
+| --- | ---: |
+| Faithfulness | 93.32% |
+| Answer relevancy | 84.21% |
+| Context precision | 87.94% |
 
-**Interpretation:**
-- **Faithfulness (95.32%):** High confidence that answers derive from retrieved context; minimal hallucination.
-- **Answer Relevancy (84.21%):** 84% of answers directly address the query. Gap suggests some irrelevant context or verbose responses. Borderline performance on vector-only search.
-- **Context Precision (87.94%):** 88% of retrieved chunks are relevant to the query; 12% false positives. This baseline can be improved by enabling hybrid search to handle keyword mismatches (e.g., Q020: "SLA" vs. "response time").
+Interpretation:
 
-### Query-Level Breakdown
+- Faithfulness is high, meaning answers are strongly supported by retrieved context.
+- Answer relevancy is good but not perfect for more complex troubleshooting questions.
+- Context precision shows that retrieval still occasionally brings in unrelated evidence.
 
-| Category | Easy (Count) | Medium (Count) | Hard (Count) | Avg Precision |
-| :--- | :---: | :---: | :---: | :---: |
+### Query-level breakdown
+
+| Category | Easy | Medium | Hard | Avg precision |
+| --- | ---: | ---: | ---: | ---: |
 | Workflows | 5 | 3 | 2 | 92% |
 | API | 8 | 2 | 1 | 89% |
 | Billing | 3 | 2 | 0 | 91% |
 | Admin | 4 | 3 | 1 | 85% |
 | Troubleshooting | 2 | 4 | 5 | 76% |
 
-**Key Insight:** Easy queries (e.g., "What's the Pro plan cost?") achieve near-perfect precision. Hard/troubleshooting queries (multi-step reasoning) have lower precision, suggesting need for multi-query expansion or reasoning chains.
+Key insight: easy queries perform well, while troubleshooting and multi-hop queries have lower precision and greater risk of incomplete answers.
 
-### Representative Failure Cases & Analysis
+### Representative failure cases
 
-#### **Case 1: Q020 - SLA Mismatch (Precision = 0.0)**
+#### Case 1: Q020 — SLA mismatch (precision = 0.0)
 
-**Query:** "What's the support response SLA on Pro?"
+- Query: "What's the support response SLA on Pro?"
+- Ground truth: "On Pro, the support response SLA is 8 hours."
+- Generated answer: the model pulled a mismatched SLA rule from a different document.
+- Root cause: a terminology mismatch between the query and the source documentation.
+- Fix: use hybrid search, which includes sparse keyword matching.
 
-**Ground Truth:** "On Pro, the support response SLA is 8 hours."
+#### Case 2: Q042 — complex reasoning (answer relevancy = 0.0)
 
-**Generated Answer:** "The default Enterprise SLA applies to customers if specific SLA terms are absent in their account record. This default SLA includes a 1-hour response..."
+- Query: "I'm seeing my workflow run time slowly creep up over the last two weeks even though I haven't changed anything. What should I look at?"
+- Root cause: the problem required multi-step diagnostics spread across multiple sources.
+- Fix: implement multi-query expansion or a stronger reasoning flow.
 
-**Retrieved Sources:** All chunks from `runbooks/customer-ops/custom-sla-handling.pdf` (duplicates)
+#### Case 3: Q017 — provider vs. platform context (precision = 0.0)
 
-**Root Cause Analysis:**
-- Pinecone (vector search) failed to retrieve `product-docs/billing/plans.md` due to semantic drift: query uses "support response SLA" but the document says "Email + chat support, 8-hour response SLA" under Pro plan
-- Vector embedding similarity for "SLA" (Service Level Agreement) does not match "response time" well enough for retrieval ranking.
-- **Why it failed:** Terminology mismatch between query and documentation; pure semantic similarity insufficient without keyword matching (BM25).
-
-**Potential Fix:** Enable hybrid search (BM25 + vector) which would catch the exact keyword "SLA" in both documents and rank the correct plan-specific doc higher.
-
----
-
-#### **Case 2: Q042 - Complex Reasoning (Answer Relevancy = 0.0)**
-
-**Query:** "I'm seeing my workflow run time slowly creep up over the last two weeks even though I haven't changed anything. What should I look at?"
-
-**Ground Truth:** "Workflow runtime drift is rarely platform-side; it's usually upstream data growth. Check: (1) is the data volume growing? (2) is one specific step disproportionately slowing..."
-
-**Generated Answer:** "You should consider the possibility that the volume of records being processed by your workflow has increased, which can lead to longer run times. For..."
-
-**Retrieved Sources:** `ticket-1402-slow-execution.html` and `ticket-1234-workflow-timeout.html`
-
-**Root Cause Analysis:**
-- Answer is *partially correct* (identifies data volume growth) but fails to address the multi-step diagnosis outlined in ground truth.
-- Retrieved ticket snippets are relevant but lack the structured troubleshooting framework (check data volume → check specific step → consider integration latency).
-- Ragas evaluated as 0.0 because the generated answer is incomplete and doesn't cover all the diagnostic steps.
-
-**Why it failed:** Complex, multi-faceted queries need multi-hop reasoning; a single retrieval pass with 4 chunks is insufficient. The best context might be spread across multiple documents.
-
-**Fix:** Multi-query generation (break query into sub-questions: "What causes workflow slowdown?", "How to debug slow steps?") or implement chain-of-thought prompting.
+- Query: "What does HTTP 401 mean from the Helix API?"
+- Root cause: the model confused API-authentication context with OAuth or provider context.
+- Fix: add metadata filters or a reranking step for context-aware retrieval.
 
 ---
 
-#### **Case 3: Q017 - Provider vs. Platform Context (Precision = 0.0)**
-
-**Query:** "What does HTTP 401 mean from the Helix API?"
-
-**Ground Truth:** "HTTP 401 means: Invalid or expired API key."
-
-**Generated Answer:** "HTTP 401 from the Helix API likely indicates a permissions issue at the provider. This means that the connected user may have lost access to the resource..."
-
-**Retrieved Sources:** `product-docs/integrations/oauth-flow.md`, `product-docs/api/errors.md`, `product-docs/api/rate-limits.md`
-
-**Root Cause Analysis:**
-- Retrieved `oauth-flow.md` (integration context) instead of `api/errors.md` reference to API-specific 401.
-- LLM conflated "401 from the provider's OAuth endpoint" (OAuth context) with "401 from Helix API endpoint" (API context).
-- Answer is plausible but incorrect for the Helix platform context.
-- **Why it failed:** Semantic similarity alone doesn't disambiguate context (OAuth vs. native API). Pinecone ranked OAuth doc higher due to dense embedding similarity on "401" and "authentication" terms.
-
-**Fix:** Add context-specific metadata tags (e.g., `context_type: "api"` vs. `context_type: "oauth"`) to enable filtered retrieval or use re-ranking (e.g., Cohere Reranker) to boost API-context documents post-retrieval.
-
----
-
-## How to Run
+## How to run
 
 ```bash
-# 1. Clone repository and navigate to project root
-git clone [https://github.com/Amogha03/checkpoint-rag.git]
+# 1. Clone repository and navigate to the project root
+git clone https://github.com/Amogha03/checkpoint-rag.git
 cd checkpoint-rag
 
-# 2. Create virtual environment, activate it, and install dependencies
-python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+# 2. Create a virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
 
-# 3. Create environment configuration file (edit with your API keys)
+# 3. Create the environment configuration file and add your API keys
 cp .env.example .env
 
-# 4. Ingest document corpus into Pinecone vector DB
+# 4. Ingest the document corpus into Pinecone
 python -m src.ingest --corpus ./corpus
 
-# 5. Run a test query and execute the 50-query evaluation harness
-python pipeline.py && python harness.py
-
+# 5. Run a test query and execute the evaluation harness
+python src/pipeline.py
+python -m evals.harness
 ```
----
-
-## Next Steps: Ranked Improvements for Next Week
-
-### 1. **Multi-Query Expansion (High Priority, Medium Effort)**
-   - **Problem:** Complex, multi-faceted queries (Q042) and terminology mismatches (Q020) result in suboptimal retrieval.
-   - **Solution:** Expand single query into 3-5 reformulations (e.g., "workflow runtime" → ["workflow slowdown", "step latency", "execution time drift"]) and retrieve with all variants, then deduplicate.
-   - **Expected Impact:** +5-8% answer relevancy; helps troubleshooting queries.
-   - **Implementation:** Modify `retrieve.py` to call LLM for query expansion; merge results with max pooling.
-
-### 2. **Re-Ranking with Cross-Encoder (High Priority, High Effort)**
-   - **Problem:** Hybrid search combines dense + sparse but doesn't re-rank by query-relevance (Q017 ranks OAuth doc incorrectly).
-   - **Solution:** Use Cohere Reranker or open-source cross-encoder (`ms-marco-cross-encoder`) to re-rank top-20 (4 from each retriever × 2.5) down to top-4.
-   - **Expected Impact:** +8-12% context precision; fixes context confusion (OAuth vs. API).
-   - **Implementation:** Add `rank_documents()` step in `pipeline.py` after ensemble retrieval.
-   - **Trade-off:** +200ms latency; requires new API calls or model inference.
-
-### 3. **Caching & Query Deduplication (Medium Priority, Low Effort)**
-   - **Problem:** CSM team asks repeated questions; each re-computes embeddings and retrieval.
-   - **Solution:** Redis cache (query → answer) with 24-hour TTL; reuse for identical/similar queries.
-   - **Expected Impact:** 90% cache hit rate for CSM queries; 10x latency improvement for repeats.
-   - **Implementation:** Wrap `generate_response()` with `functools.lru_cache` or Redis client.
-
-### 4. **Incremental Ingestion & Update Pipeline (Low Priority, High Effort)**
-   - **Problem:** Currently re-ingests entire corpus; breaks when adding one FAQ.
-   - **Solution:** Track document hashes; only re-chunk/embed modified documents. Implement soft deletes in Pinecone.
-   - **Expected Impact:** Ingest time drops from 3min to 30sec for typical updates.
-   - **Implementation:** Add versioning to `ingest.py`; store metadata (hash, timestamp) in Pinecone.
 
 ---
 
-## Project Structure
+## Next steps: ranked improvements for next week
 
-```
+### 1. Multi-query expansion (high priority, medium effort)
+
+- Problem: complex queries and terminology mismatches reduce retrieval quality.
+- Solution: expand a single query into multiple reformulations and retrieve from all of them.
+- Expected impact: improved answer relevancy for troubleshooting queries.
+
+### 2. Re-ranking with a cross-encoder (high priority, high effort)
+
+- Problem: hybrid search still allows semantically related but contextually wrong documents to rank too high.
+- Solution: re-rank top results after retrieval.
+- Expected impact: better context precision and fewer false positives.
+
+### 3. Caching and query deduplication (medium priority, low effort)
+
+- Problem: repeated customer support questions recompute retrieval unnecessarily.
+- Solution: cache repeated query results for a short TTL.
+- Expected impact: lower latency for common requests.
+
+### 4. Incremental ingestion and update pipeline (low priority, high effort)
+
+- Problem: re-ingesting the full corpus is inefficient for small updates.
+- Solution: track document hashes and only reprocess modified content.
+- Expected impact: much faster refreshes for content updates.
+
+---
+
+## Project structure
+
+```text
 checkpoint-rag/
 ├── src/
 │   ├── ingest.py              # Document loading, chunking, embedding, Pinecone upsert
 │   ├── retrieve.py            # Hybrid retrieval (Pinecone + BM25)
 │   ├── generate.py            # LLM prompt + structured output
-│   └── pipeline.py            # Orchestrates retrieve → generate
+│   └── pipeline.py            # Retrieve -> generate orchestration
 ├── evals/
 │   ├── harness.py             # Ragas evaluation engine
 │   ├── test_set.json          # 50-query ground truth dataset
 │   └── results/
-│       ├── eval_results.json  # Machine-readable results
-│       └── eval_report.md     # Human-readable report
+│       ├── eval_results.json  # Machine-readable eval results
+│       └── eval_report.md     # Human-readable evaluation report
+├── ops/
+│   ├── data_quality/
+│   ├── langsmith/
+│   ├── monitoring/
+│   └── phoenix/
+├── corpus/
+│   ├── README.md
+│   ├── product-docs/
+│   ├── runbooks/
+│   └── tickets/
 ├── tests/
 │   ├── test_ingest.py
 │   ├── test_retrieve.py
 │   ├── test_generate.py
 │   └── test_evals.py
-├── pyproject.toml             # Dependencies & build config
-└── README.md                  # This file
+├── pyproject.toml
+├── README.md
+└── .env.example
 ```
 
 ---
 
 ## Dependencies
 
-- **LangChain** (>=0.3.0): Orchestration framework
-- **OpenAI** (gpt-4o-mini for generation, text-embedding-3-small for embeddings)
-- **Pinecone** (serverless vector database)
-- **Ragas** (evaluation metrics)
-- **Pydantic** (structured output schemas)
+- LangChain: orchestration and retrieval tooling
+- OpenAI: GPT-4o-mini for generation and text-embedding-3-small for embeddings
+- Pinecone: vector database
+- Ragas: evaluation metrics
+- Pydantic: structured output schemas
 
 ---
 
-## License & Support
+## Operational maturity summary
+
+The system adds repeatable LangSmith evaluations, optional Phoenix/OpenTelemetry tracing, Great Expectations checks on chunks and vectors, and an operations monitoring specification with release gates and incident guidance.
+
+The controls connect end-to-end:
+
+- validate data before it can change Pinecone
+- trace requests to inspect latency, token usage, and retrieved sources
+- evaluate answer quality against a versioned reference set
+- decide whether to release or investigate based on those results
+
+---
+
+## Eval methodology
+
+The local Ragas harness reports:
+
+- faithfulness: whether answer claims are supported by the retrieved context
+- answer relevancy: whether the answer matches the user's query
+- context precision: whether retrieval returned relevant evidence
+
+The LangSmith run uses corresponding faithfulness and relevance evaluators plus a custom `csm_support_accuracy` LLM-as-a-judge. This judge receives the query, generated answer, retrieved contexts, reference answer, and expected/returned sources, then scores accuracy and completeness from 0 to 1 with a rationale.
+
+The reference answer and expected-source fields anchor the judge to the evaluation set rather than general model knowledge. This is reference-based rubric grounding, not a formal statistical calibration. Treat the judge as a release signal to review, not as absolute ground truth.
+
+LangSmith project: [Checkpoint RAG Ops Evals](https://smith.langchain.com/o/8e1877a0-b0a4-4ce4-9417-1b5030c0a3c7/a/checkpoint-rag-ops-evals/projects/p/09665629-c9f5-4e32-b0da-2d07b7100efe)
+
+---
+
+## Observability findings
+
+Phoenix instruments LangChain and adds query-level spans with latency, token counts, retrieved document IDs, and answer citations. In the saved sample, mean latency was 1.468s and maximum latency was 2.512s.
+
+The main findings were:
+
+- expected sources were not always prioritized
+- some duplicate sources were returned
+- irrelevant context still consumed prompt space and could distract generation
+
+The repository currently tracks these as a baseline rather than claiming a measured improvement without a post-fix evaluation.
+
+---
+
+## Data quality contract
+
+Before ingestion can recreate the Pinecone index or upsert vectors, Great Expectations checks must pass:
+
+- approximate chunk size is between 50 and 300 tokens
+- `source_path`, `chunk_index`, `doc_type`, and `chunk_text` are non-null
+- `chunk_index` is nonnegative
+- an embedding exists and has exactly 1536 dimensions
+- `contains_pii` is false
+
+Any failed expectation rejects the batch before Pinecone mutation.
+
+---
+
+## Monitoring plan summary
+
+| Signal | Threshold | Rationale |
+| --- | --- | --- |
+| End-to-end latency | Warn at p95 > 5s for 10 min; page at p95 > 10s for 5 min | Detect sustained tail latency before it becomes user-visible |
+| Availability / error rate | Availability >= 99.5% monthly; error rate < 1% over 5 min | catch recurring failures early |
+| Answer quality | Faithfulness and support accuracy >= 0.90; relevance >= 0.85 | release gate for quality and completeness |
+| Source / citation quality | Expected-source hit rate >= 0.90 | answers need trustworthy, relevant evidence |
+| Ingestion quality | 100% of Great Expectations checks pass before Pinecone mutation | prevents invalid content from entering the index |
+
+---
+
+## Production readiness verdict
+
+**HOLD for general production rollout.**
+
+Three evidence points support this decision:
+
+1. The saved 50-query evaluation reports mean CSM support accuracy below the release threshold, despite high faithfulness and relevance.
+2. Phoenix surfaced retrieval noise and duplicate-source behavior.
+3. The data-quality sample passed checks, but the sample is not a full-corpus audit and production load, rollback, and alert handling have not been demonstrated.
+
+I would move to a limited GO only after the fixed evaluation set meets the quality thresholds, low-scoring cases receive human review, retrieval changes improve source quality without unacceptable latency regressions, and load testing establishes production baselines with tested alerts.
+
+---
+
+## License and support
 
 Built as an internal tool for Customer Success. For questions or improvements, contact the Data/AI team.

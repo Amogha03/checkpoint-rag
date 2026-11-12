@@ -26,6 +26,8 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 INDEX_NAME = "checkpoint-rag-index"  # global index name
 MODEL_NAME = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
+MIN_CHUNK_TOKENS = 50
+MAX_CHUNK_TOKENS = 300
 
 
 def init_pinecone_index():
@@ -50,14 +52,10 @@ def init_pinecone_index():
 
 
 def init_rag_components():
-    """Initializes and returns the embeddings, vector store, and LLM instances."""
+    """Initialize the embedding client used to prepare the vector batch."""
     if not OPENAI_API_KEY or not PINECONE_API_KEY:
         raise ValueError("Missing OPENAI_API_KEY or PINECONE_API_KEY in environment.")
 
-    # Ensure the Pinecone index exists before connecting
-    init_pinecone_index()
-
-    # 1. Initialize OpenAI Embeddings
     embeddings = OpenAIEmbeddings(
         model=EMBEDDING_MODEL,
         api_key=OPENAI_API_KEY,
@@ -152,10 +150,33 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def merge_short_chunks(
+    chunk_list: List[str],
+    min_tokens: int = MIN_CHUNK_TOKENS,
+    max_tokens: int = MAX_CHUNK_TOKENS,
+) -> List[str]:
+    """Merge undersized adjacent splits while keeping chunks within the maximum."""
+    merged: List[str] = []
+    for chunk in chunk_list:
+        if merged and estimate_tokens(merged[-1]) < min_tokens:
+            candidate = f"{merged[-1]}\n\n{chunk}"
+            if estimate_tokens(candidate) <= max_tokens:
+                merged[-1] = candidate
+                continue
+        merged.append(chunk)
+
+    if len(merged) > 1 and estimate_tokens(merged[-1]) < min_tokens:
+        candidate = f"{merged[-2]}\n\n{merged[-1]}"
+        if estimate_tokens(candidate) <= max_tokens:
+            merged[-2] = candidate
+            merged.pop()
+    return merged
+
+
 def chunk_document(
     text: str,
     doc_type: str,
-    chunk_size: int = 512,
+    chunk_size: int = 100,
     overlap_percent: float = 0.2,
 ) -> List[str]:
     """
@@ -197,7 +218,7 @@ def chunk_document(
         for doc in md_header_splits:
             splits = recursive_splitter.split_text(doc.page_content)
             chunks.extend(splits)
-        return chunks
+        return merge_short_chunks(chunks)
 
     elif doc_type == "pdf":
         # Split by recursive separators (PDF text structure)
@@ -206,7 +227,7 @@ def chunk_document(
             chunk_overlap=char_overlap,
             separators=["\n\n", "\n", ". ", " ", ""],
         )
-        return splitter.split_text(text)
+        return merge_short_chunks(splitter.split_text(text))
 
     elif doc_type == "html":
         # Split by recursive separators (HTML structure)
@@ -215,7 +236,7 @@ def chunk_document(
             chunk_overlap=char_overlap,
             separators=["</p>", "</div>", "\n\n", "\n", ". ", " ", ""],
         )
-        return splitter.split_text(text)
+        return merge_short_chunks(splitter.split_text(text))
 
     else:
         # Fallback: generic recursive split
@@ -224,7 +245,7 @@ def chunk_document(
             chunk_overlap=char_overlap,
             separators=["\n\n", "\n", ". ", " ", ""],
         )
-        return splitter.split_text(text)
+        return merge_short_chunks(splitter.split_text(text))
 
 
 def create_chunk_vectors(
@@ -264,6 +285,20 @@ def create_chunk_vectors(
     return vectors
 
 
+def validate_vectors(vectors: List[Dict]) -> None:
+    """Reject invalid vector batches before they are sent to Pinecone."""
+    from ops.data_quality.expectations import validate_records
+
+    result = validate_records(vectors)
+    if not result.success:
+        failed = [
+            item.expectation_config.expectation_type
+            for item in result.results
+            if not item.success
+        ]
+        raise ValueError(f"Pre-upsert chunk validation failed: {', '.join(failed)}")
+
+
 def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
     """
     Complete ingestion pipeline: load -> chunk -> embed -> upsert to Pinecone.
@@ -300,6 +335,13 @@ def ingest_corpus(corpus_dir: str) -> Dict[str, int]:
         all_vectors.extend(vectors)
 
     print(f"\n✓ Total chunks created: {chunk_count}")
+
+    print("\nValidating processed chunks before Pinecone upsert")
+    validate_vectors(all_vectors)
+    print(f"All {len(all_vectors)} processed chunks passed data-quality checks")
+
+    # Do not alter the Pinecone index until the prepared batch passes validation.
+    init_pinecone_index()
 
     # Upsert to Pinecone in batches
     print("\n" + "=" * 70)

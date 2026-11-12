@@ -34,14 +34,16 @@ class DummyPinecone:
 def test_ingest_corpus_runs_without_errors(tmp_path, monkeypatch):
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
-    (corpus_dir / "sample.md").write_text("# Sample\n\nThis is a short doc for ingestion tests.", encoding="utf-8")
+    sample_text = "# Sample\n\n" + "ingestion validation sample content " * 70
+    (corpus_dir / "sample.md").write_text(sample_text, encoding="utf-8")
 
     monkeypatch.setattr(ingest, "init_rag_components", lambda: DummyEmbeddings())
     monkeypatch.setattr(
         ingest,
         "load_documents",
-        lambda _: [("sample.md", "markdown", "# Sample\n\nThis is a short doc for ingestion tests.")],
+        lambda _: [("sample.md", "markdown", sample_text)],
     )
+    monkeypatch.setattr(ingest, "init_pinecone_index", lambda: None)
     monkeypatch.setattr(ingest, "Pinecone", DummyPinecone)
 
     stats = ingest.ingest_corpus(str(corpus_dir))
